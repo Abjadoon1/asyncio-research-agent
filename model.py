@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from typing import Literal
 from openai import OpenAI
 from dotenv import load_dotenv
-from tools import web_search, documentation_search, local_search
+from research_agent.tools import web_search, documentation_search, local_search
 
 load_dotenv()
 openai_key = os.getenv("OPENAI_API_KEY")
