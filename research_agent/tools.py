@@ -18,13 +18,14 @@ async def web_search(query: str):
     return result
 
 
-async def documentation_search(query: str):
-    documentation_query = f"official documentation {query}"
+async def official_research(query: str, domains: list[str]):
+    documentation_query = f"official documentation: {query}"
 
     result = await asyncio.to_thread(
         tavily_client.search,
         query=documentation_query,
         max_results=3,
+        include_domains=domains,
     )
 
     return result

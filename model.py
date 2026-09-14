@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from typing import Literal
 from openai import OpenAI
 from dotenv import load_dotenv
-from research_agent.tools import web_search, documentation_search, local_search
+from research_agent.tools import web_search, official_research, local_search
 
 load_dotenv()
 openai_key = os.getenv("OPENAI_API_KEY")
@@ -15,8 +15,9 @@ openai_client = OpenAI(api_key=openai_key)
 
 
 class ResearchTask(BaseModel):
-    source: Literal["web", "documentation", "local"]
+    source: Literal["web", "official", "local"]
     query: str
+    domains: list[str] = Field(default_factory=list)
 
 
 class ResearchPlan(BaseModel):
@@ -29,7 +30,7 @@ Create a research plan for the user's query.
 
 Available research sources:
 - web: recent or general external information
-- documentation: official product or technical documentation
+- official: First-party authoritative sources relevant to the subject, such as government agencies, official organisations, companies, product documentation, standards bodies, or official reports.
 - local: information stored in the local knowledge source
 
 Requirements:
@@ -38,6 +39,7 @@ Requirements:
 - make each task independent where possible so tasks can run concurrently
 - write a specific search query for each task
 - avoid duplicate or overlapping tasks
+- when source is official include the relevant official domains. (for other source type, leave domain empty)
 
 - do not invent date ranges; preserve the user's time requirement
 """
@@ -53,14 +55,19 @@ Requirements:
 
 tools = {
     "web": web_search,
-    "documentation": documentation_search,
+    "official": official_research,
     "local": local_search,
 }
 
 
 async def execute_task(task: ResearchTask):
     try:
-        result = await asyncio.wait_for(tools[task.source](task.query), timeout=5.0)
+        if task.source == "official":
+            result = await asyncio.wait_for(
+                official_research(task.query, task.domains), timeout=5.0
+            )
+        else:
+            result = await asyncio.wait_for(tools[task.source](task.query), timeout=5.0)
 
         return {
             "success": True,
@@ -97,7 +104,7 @@ def normalize_results(results: list[dict]) -> list[dict]:
         if not result["success"]:
             continue
 
-        if result["source"] in ("web", "documentation"):
+        if result["source"] in ("web", "official"):
 
             tavily_results = result["results"].get("results", [])
 

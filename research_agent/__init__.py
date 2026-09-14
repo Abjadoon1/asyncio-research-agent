@@ -1,1 +1,1 @@
-from .tools import web_search, documentation_search, local_search
+from .tools import web_search, official_research, local_search
