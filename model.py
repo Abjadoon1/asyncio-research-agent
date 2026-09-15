@@ -7,6 +7,13 @@ from typing import Literal
 from openai import OpenAI
 from dotenv import load_dotenv
 from research_agent.tools import web_search, official_research, local_search
+from research_agent.database import (
+    create_table,
+    save_research_run,
+    save_research_tasks,
+    save_evidence,
+    save_answers,
+)
 
 load_dotenv()
 openai_key = os.getenv("OPENAI_API_KEY")
@@ -15,6 +22,7 @@ openai_client = OpenAI(api_key=openai_key)
 
 
 class ResearchTask(BaseModel):
+    task_id: str
     source: Literal["web", "official", "local"]
     query: str
     domains: list[str] = Field(default_factory=list)
@@ -34,6 +42,7 @@ Available research sources:
 - local: information stored in the local knowledge source
 
 Requirements:
+- assign each task unique id e.g 'T1'
 - create only useful research tasks
 - choose the most appropriate source for each task
 - make each task independent where possible so tasks can run concurrently
@@ -71,6 +80,7 @@ async def execute_task(task: ResearchTask):
 
         return {
             "success": True,
+            "task_id": task.task_id,
             "source": task.source,
             "query": task.query,
             "results": result,
@@ -78,6 +88,7 @@ async def execute_task(task: ResearchTask):
     except asyncio.TimeoutError:
         return {
             "success": False,
+            "task_id": task.task_id,
             "source": task.source,
             "query": task.query,
             "error": f"{task.source} timed out",
@@ -85,6 +96,7 @@ async def execute_task(task: ResearchTask):
     except Exception as e:
         return {
             "success": False,
+            "task_id": task.task_id,
             "source": task.source,
             "query": task.query,
             "error": str(e),
@@ -100,6 +112,8 @@ async def execute_plan(plan: ResearchPlan):
 def normalize_results(results: list[dict]) -> list[dict]:
     normalized_results = []
     seen_urls = set()
+    evidence_counter = 1
+
     for result in results:
         if not result["success"]:
             continue
@@ -109,12 +123,16 @@ def normalize_results(results: list[dict]) -> list[dict]:
             tavily_results = result["results"].get("results", [])
 
             for item in tavily_results:
+                evidence_id = f"E{evidence_counter}"
                 url = item.get("url")
                 if url in seen_urls:
                     continue
                 seen_urls.add(url)
+                evidence_counter += 1
                 normalized_results.append(
                     {
+                        "task_id": result["task_id"],
+                        "evidence_id": evidence_id,
                         "source_type": result["source"],
                         "title": item.get("title", "unknown"),
                         "url": item.get("url", "unknown"),
@@ -124,8 +142,11 @@ def normalize_results(results: list[dict]) -> list[dict]:
                 )
         elif result["source"] == "local":
             for item in result["results"]:
+                evidence_counter += 1
                 normalized_results.append(
                     {
+                        "task_id": result["task_id"],
+                        "evidence_id": evidence_id,
                         "source_type": "local",
                         "title": item.get("file", "unknown"),
                         "url": None,
@@ -170,16 +191,20 @@ Evidence:
 
 
 query = input("Question: ")
+create_table()
+run_db_id = save_research_run(query)
 plan = create_research_plan(query)
+task_db_ids = save_research_tasks(run_db_id, plan.tasks)
 print(plan)
 start = time.perf_counter()
 results = asyncio.run(execute_plan(plan))
 end = time.perf_counter()
 normalized = normalize_results(results)
-
+save_evidence(task_db_ids, normalized)
 for evidence in normalized:
     print("-" * 80)
     print(evidence)
     print("-" * 80)
-print(synthesize_answer(query, normalized))
+answer = synthesize_answer(query, normalized)
+save_answers(run_db_id, answer)
 print(f"Time taken: {end - start}")
