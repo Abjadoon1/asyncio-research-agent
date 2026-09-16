@@ -82,7 +82,10 @@ def save_research_tasks(run_db_id, tasks):
 def save_evidence(task_db_ids, normalized_results):
     with get_connection() as conn:
         cursor = conn.cursor()
+        saved_evidence = []
         for result in normalized_results:
+            if result["source_type"] == "memory":
+                continue
             task_db_id = task_db_ids[result["task_id"]]
 
             matched_words = result.get("matched_words")
@@ -112,6 +115,9 @@ def save_evidence(task_db_ids, normalized_results):
                     matched_words,
                 ),
             )
+            row = {"sqlite_evidence_id": cursor.lastrowid, "evidence": result}
+            saved_evidence.append(row)
+        return saved_evidence
 
 
 def save_answers(run_db_id, answer):

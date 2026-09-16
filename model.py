@@ -6,7 +6,8 @@ from pydantic import BaseModel, Field
 from typing import Literal
 from openai import OpenAI
 from dotenv import load_dotenv
-from research_agent.tools import web_search, official_research, local_search
+from research_agent.tools import web_search, official_research
+from research_agent.memory import search_memory, ingest_reseach
 from research_agent.database import (
     create_table,
     save_research_run,
@@ -23,7 +24,7 @@ openai_client = OpenAI(api_key=openai_key)
 
 class ResearchTask(BaseModel):
     task_id: str
-    source: Literal["web", "official", "local"]
+    source: Literal["web", "official", "memory"]
     query: str
     domains: list[str] = Field(default_factory=list)
 
@@ -39,7 +40,9 @@ Create a research plan for the user's query.
 Available research sources:
 - web: recent or general external information
 - official: First-party authoritative sources relevant to the subject, such as government agencies, official organisations, companies, product documentation, standards bodies, or official reports.
-- local: information stored in the local knowledge source
+- memory: previously researched evidence stored in the system.
+  Use it when earlier research may contain relevant information,
+  but do not rely on it for information that must be current or recent.
 
 Requirements:
 - assign each task unique id e.g 'T1'
@@ -65,7 +68,7 @@ Requirements:
 tools = {
     "web": web_search,
     "official": official_research,
-    "local": local_search,
+    "memory": search_memory,
 }
 
 
@@ -140,20 +143,20 @@ def normalize_results(results: list[dict]) -> list[dict]:
                         "research_query": result["query"],
                     }
                 )
-        elif result["source"] == "local":
+        elif result["source"] == "memory":
             for item in result["results"]:
-                evidence_counter += 1
+                metadata = item["metadata"]
+
                 normalized_results.append(
                     {
                         "task_id": result["task_id"],
-                        "evidence_id": evidence_id,
-                        "source_type": "local",
-                        "title": item.get("file", "unknown"),
-                        "url": None,
-                        "content": item.get("text", "unknown"),
+                        "sqlite_evidence_id": metadata["sqlite_evidence_id"],
+                        "source_type": "memory",
+                        "title": metadata.get("title", "unknown"),
+                        "url": metadata.get("url"),
+                        "content": item["content"],
                         "research_query": result["query"],
-                        "line_no": item.get("line_no"),
-                        "matched_words": item.get("matched_words", []),
+                        "distance": item["distance"],
                     }
                 )
 
@@ -200,7 +203,9 @@ start = time.perf_counter()
 results = asyncio.run(execute_plan(plan))
 end = time.perf_counter()
 normalized = normalize_results(results)
-save_evidence(task_db_ids, normalized)
+saved_evidence = save_evidence(task_db_ids, normalized)
+result_count = ingest_reseach(saved_evidence)
+print(f"chromdb_count = {result_count}")
 for evidence in normalized:
     print("-" * 80)
     print(evidence)

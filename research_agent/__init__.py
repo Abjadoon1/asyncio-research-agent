@@ -1,4 +1,4 @@
-from .tools import web_search, official_research, local_search
+from .tools import web_search, official_research
 from .database import (
     create_table,
     save_research_run,
@@ -6,3 +6,5 @@ from .database import (
     save_evidence,
     save_answers,
 )
+
+from .memory import ingest_reseach, search_memory

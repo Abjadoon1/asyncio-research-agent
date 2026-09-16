@@ -29,29 +29,3 @@ async def official_research(query: str, domains: list[str]):
     )
 
     return result
-
-
-async def local_search(query: str):
-    search_path = Path(__file__).resolve().parent.parent
-    keywords = query.lower().split()
-
-    matches = []
-
-    for file_path in search_path.rglob("*.txt"):
-        with open(file_path, "r") as f:
-            for line_no, line in enumerate(f, start=1):
-                line_lower = line.lower()
-
-                matched_words = [word for word in keywords if word in line_lower]
-
-                if matched_words:
-                    matches.append(
-                        {
-                            "file": file_path.name,
-                            "line_no": line_no,
-                            "text": line.strip(),
-                            "matched_words": matched_words,
-                        }
-                    )
-
-    return matches
