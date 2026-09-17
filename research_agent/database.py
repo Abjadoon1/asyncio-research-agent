@@ -1,5 +1,4 @@
 import sqlite3
-import json
 
 
 def get_connection():
@@ -20,28 +19,26 @@ def create_table():
                     CREATE TABLE IF NOT EXISTS research_tasks(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     run_db_id TEXT NOT NULL,
-                    task_id  INTEGER NOT NULL,
-                    source TEXT,
-                    query TEXT,
+                    task_id  TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    query  TEXT NOT NULL,
                     FOREIGN KEY (run_db_id) REFERENCES research_runs(id))
                     """)
         cursor.execute("""
                     CREATE TABLE IF NOT EXISTS evidence(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_db_id TEXT NOT NULL,
-                    evidence_id  INTEGER NOT NULL,
+                    task_db_id INTEGER NOT NULL,
+                    evidence_id  TEXT NOT NULL,
                     title TEXT,
                     url TEXT,
-                    content TEXT,
-                    line_no INTEGER,
-                    matches TEXT,
+                    content TEXT NOT NULL,
                     FOREIGN KEY (task_db_id) REFERENCES research_tasks(id))
                     """)
         cursor.execute("""
                     CREATE TABLE IF NOT EXISTS answers(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_db_id TEXT NOT NULL,
-                    answer TEXT,
+                    run_db_id INTEGER NOT NULL,
+                    answer TEXT NOT NULL,
                     FOREIGN KEY (run_db_id) REFERENCES research_runs(id))     
                     """)
 
@@ -79,19 +76,25 @@ def save_research_tasks(run_db_id, tasks):
     return task_db_ids
 
 
-def save_evidence(task_db_ids, normalized_results):
+def find_evidence_by_url(url):
     with get_connection() as conn:
         cursor = conn.cursor()
-        saved_evidence = []
+        cursor.execute("SELECT id FROM evidence WHERE url = ? ", (url,))
+        evidence_id = cursor.fetchone()
+        return evidence_id[0] if evidence_id else None
+
+
+def save_evidence(task_db_ids, normalized_results):
+    saved_evidence = []
+    with get_connection() as conn:
+        cursor = conn.cursor()
         for result in normalized_results:
-            if result["source_type"] == "memory":
-                continue
+            url = result.get("url")
+            if url:
+                check_evidence = find_evidence_by_url(url)
+                if check_evidence:
+                    continue
             task_db_id = task_db_ids[result["task_id"]]
-
-            matched_words = result.get("matched_words")
-            if matched_words is not None:
-                matched_words = json.dumps(matched_words)
-
             cursor.execute(
                 """
                 INSERT INTO evidence(
@@ -99,20 +102,16 @@ def save_evidence(task_db_ids, normalized_results):
                     evidence_id,
                     title,
                     url,
-                    content,
-                    line_no,
-                    matches
+                    content
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
             """,
                 (
                     task_db_id,
                     result["evidence_id"],
                     result.get("title"),
-                    result.get("url"),
+                    url,
                     result.get("content"),
-                    result.get("line_no"),
-                    matched_words,
                 ),
             )
             row = {"sqlite_evidence_id": cursor.lastrowid, "evidence": result}

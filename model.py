@@ -24,25 +24,33 @@ openai_client = OpenAI(api_key=openai_key)
 
 class ResearchTask(BaseModel):
     task_id: str
-    source: Literal["web", "official", "memory"]
+    source: Literal["web", "official"]
     query: str
     domains: list[str] = Field(default_factory=list)
 
 
 class ResearchPlan(BaseModel):
-    tasks: list[ResearchTask] = Field(default_factory=list, min_length=1, max_length=6)
+    tasks: list[ResearchTask] = Field(default_factory=list, max_length=6)
 
 
-def create_research_plan(query: str) -> ResearchPlan:
+def create_research_plan(query: str, memory_results: list[dict]) -> ResearchPlan:
     instruction = f"""
 Create a research plan for the user's query.
+
+Relevant evidence from previous research may be provided with the user's question.
+
+Treat that evidence as research that has ALREADY been completed.
+
+Before creating tasks:
+1. Determine which parts of the user's question are already covered by the provided evidence.
+2. Do NOT create research tasks merely to rediscover information already supported by that evidence.
+3. Create tasks only for specific gaps, outdated information, conflicts, weak evidence, or facts requiring current verification.
+4. If the existing evidence sufficiently covers a non-time-sensitive aspect of the question, create no task for that aspect.
+5. For current/latest claims, create targeted verification tasks rather than repeating the entire previous research.
 
 Available research sources:
 - web: recent or general external information
 - official: First-party authoritative sources relevant to the subject, such as government agencies, official organisations, companies, product documentation, standards bodies, or official reports.
-- memory: previously researched evidence stored in the system.
-  Use it when earlier research may contain relevant information,
-  but do not rely on it for information that must be current or recent.
 
 Requirements:
 - assign each task unique id e.g 'T1'
@@ -55,11 +63,18 @@ Requirements:
 
 - do not invent date ranges; preserve the user's time requirement
 """
+    memory_text = json.dumps(memory_results, indent=2)
 
     response = openai_client.responses.parse(
         model="gpt-5.6-luna",
         instructions=instruction,
-        input=query,
+        input=f"""
+User question:
+{query}
+
+Relevant evidence from previous research:
+{memory_text}
+""",
         text_format=ResearchPlan,
     )
     return response.output_parsed
@@ -68,7 +83,6 @@ Requirements:
 tools = {
     "web": web_search,
     "official": official_research,
-    "memory": search_memory,
 }
 
 
@@ -76,7 +90,7 @@ async def execute_task(task: ResearchTask):
     try:
         if task.source == "official":
             result = await asyncio.wait_for(
-                official_research(task.query, task.domains), timeout=5.0
+                official_research(task.query, task.domains), timeout=12.0
             )
         else:
             result = await asyncio.wait_for(tools[task.source](task.query), timeout=5.0)
@@ -121,44 +135,35 @@ def normalize_results(results: list[dict]) -> list[dict]:
         if not result["success"]:
             continue
 
-        if result["source"] in ("web", "official"):
+        crawl_results = result["results"]
 
-            tavily_results = result["results"].get("results", [])
+        for crawl in crawl_results:
+            pages = crawl.get("results", [])
 
-            for item in tavily_results:
-                evidence_id = f"E{evidence_counter}"
-                url = item.get("url")
+            for page in pages:
+                url = page.get("url")
+                raw_content = page.get("raw_content")
+
+                if not url or not raw_content:
+                    continue
+
                 if url in seen_urls:
                     continue
-                seen_urls.add(url)
-                evidence_counter += 1
-                normalized_results.append(
-                    {
-                        "task_id": result["task_id"],
-                        "evidence_id": evidence_id,
-                        "source_type": result["source"],
-                        "title": item.get("title", "unknown"),
-                        "url": item.get("url", "unknown"),
-                        "content": item.get("content", "unknown"),
-                        "research_query": result["query"],
-                    }
-                )
-        elif result["source"] == "memory":
-            for item in result["results"]:
-                metadata = item["metadata"]
 
+                seen_urls.add(url)
                 normalized_results.append(
                     {
                         "task_id": result["task_id"],
-                        "sqlite_evidence_id": metadata["sqlite_evidence_id"],
-                        "source_type": "memory",
-                        "title": metadata.get("title", "unknown"),
-                        "url": metadata.get("url"),
-                        "content": item["content"],
+                        "evidence_id": f"E{evidence_counter}",
+                        "source_type": result["source"],
+                        "title": page.get("title", "unknown"),
+                        "url": url,
+                        "content": raw_content,
                         "research_query": result["query"],
-                        "distance": item["distance"],
                     }
                 )
+
+                evidence_counter += 1
 
     return normalized_results
 
@@ -196,20 +201,36 @@ Evidence:
 query = input("Question: ")
 create_table()
 run_db_id = save_research_run(query)
-plan = create_research_plan(query)
+memory_results = search_memory(query)
+print("\nMEMORY RESULTS:")
+for item in memory_results:
+    print("-" * 60)
+    print("distance:", item["distances"])
+    print("url:", item["metadatas"].get("url"))
+    print("content:", item["content"][:500])
+plan = create_research_plan(query, memory_results)
 task_db_ids = save_research_tasks(run_db_id, plan.tasks)
 print(plan)
 start = time.perf_counter()
 results = asyncio.run(execute_plan(plan))
+for result in results:
+    print(
+        result["task_id"],
+        result["source"],
+        "SUCCESS" if result["success"] else result.get("error"),
+    )
 end = time.perf_counter()
 normalized = normalize_results(results)
+print("Normalized chunks:", len(normalized))
+
+for evidence in normalized[:3]:
+    print("-" * 80)
+    print(evidence["url"])
+    print(evidence["content"][:900])
+    print("-" * 80)
 saved_evidence = save_evidence(task_db_ids, normalized)
 result_count = ingest_reseach(saved_evidence)
 print(f"chromdb_count = {result_count}")
-for evidence in normalized:
-    print("-" * 80)
-    print(evidence)
-    print("-" * 80)
 answer = synthesize_answer(query, normalized)
 save_answers(run_db_id, answer)
 print(f"Time taken: {end - start}")
