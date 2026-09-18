@@ -198,39 +198,44 @@ Evidence:
     return response.output_text
 
 
-query = input("Question: ")
-create_table()
-run_db_id = save_research_run(query)
-memory_results = search_memory(query)
-print("\nMEMORY RESULTS:")
-for item in memory_results:
-    print("-" * 60)
-    print("distance:", item["distances"])
-    print("url:", item["metadatas"].get("url"))
-    print("content:", item["content"][:500])
-plan = create_research_plan(query, memory_results)
-task_db_ids = save_research_tasks(run_db_id, plan.tasks)
-print(plan)
-start = time.perf_counter()
-results = asyncio.run(execute_plan(plan))
-for result in results:
-    print(
-        result["task_id"],
-        result["source"],
-        "SUCCESS" if result["success"] else result.get("error"),
-    )
-end = time.perf_counter()
-normalized = normalize_results(results)
-print("Normalized chunks:", len(normalized))
+def main():
+    query = input("Question: ")
+    create_table()
+    run_db_id = save_research_run(query)
+    memory_results = search_memory(query)
+    print("\nMEMORY RESULTS:")
+    for item in memory_results:
+        print("-" * 60)
+        print("distance:", item["distances"])
+        print("url:", item["metadatas"].get("url"))
+        print("content:", item["content"][:500])
+    plan = create_research_plan(query, memory_results)
+    task_db_ids = save_research_tasks(run_db_id, plan.tasks)
+    print(plan)
+    start = time.perf_counter()
+    results = asyncio.run(execute_plan(plan))
+    for result in results:
+        print(
+            result["task_id"],
+            result["source"],
+            "SUCCESS" if result["success"] else result.get("error"),
+        )
+    end = time.perf_counter()
+    normalized = normalize_results(results)
+    print("Normalized chunks:", len(normalized))
 
-for evidence in normalized[:3]:
-    print("-" * 80)
-    print(evidence["url"])
-    print(evidence["content"][:900])
-    print("-" * 80)
-saved_evidence = save_evidence(task_db_ids, normalized)
-result_count = ingest_reseach(saved_evidence)
-print(f"chromdb_count = {result_count}")
-answer = synthesize_answer(query, normalized)
-save_answers(run_db_id, answer)
-print(f"Time taken: {end - start}")
+    for evidence in normalized[:3]:
+        print("-" * 80)
+        print(evidence["url"])
+        print(evidence["content"][:900])
+        print("-" * 80)
+    saved_evidence = save_evidence(task_db_ids, normalized)
+    result_count = ingest_reseach(saved_evidence)
+    print(f"chromdb_count = {result_count}")
+    answer = synthesize_answer(query, normalized)
+    save_answers(run_db_id, answer)
+    print(f"Time taken: {end - start}")
+
+
+if __name__ == "__main__":
+    main()
