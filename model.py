@@ -15,11 +15,22 @@ from research_agent.database import (
     save_evidence,
     save_answers,
 )
+from fastapi import FastAPI
 
+app = FastAPI()
 load_dotenv()
 openai_key = os.getenv("OPENAI_API_KEY")
 
 openai_client = OpenAI(api_key=openai_key)
+
+
+class ResearchRequest(BaseModel):
+    question: str = Field(min_length=1)
+
+
+class ResearchResponse(BaseModel):
+    question: str
+    answer: str
 
 
 class ResearchTask(BaseModel):
@@ -93,7 +104,9 @@ async def execute_task(task: ResearchTask):
                 official_research(task.query, task.domains), timeout=12.0
             )
         else:
-            result = await asyncio.wait_for(tools[task.source](task.query), timeout=5.0)
+            result = await asyncio.wait_for(
+                tools[task.source](task.query), timeout=12.0
+            )
 
         return {
             "success": True,
@@ -198,43 +211,35 @@ Evidence:
     return response.output_text
 
 
-def main():
-    query = input("Question: ")
+async def run_research(query: str):
     create_table()
     run_db_id = save_research_run(query)
     memory_results = search_memory(query)
-    print("\nMEMORY RESULTS:")
-    for item in memory_results:
-        print("-" * 60)
-        print("distance:", item["distances"])
-        print("url:", item["metadatas"].get("url"))
-        print("content:", item["content"][:500])
     plan = create_research_plan(query, memory_results)
     task_db_ids = save_research_tasks(run_db_id, plan.tasks)
-    print(plan)
-    start = time.perf_counter()
-    results = asyncio.run(execute_plan(plan))
-    for result in results:
-        print(
-            result["task_id"],
-            result["source"],
-            "SUCCESS" if result["success"] else result.get("error"),
-        )
-    end = time.perf_counter()
+    results = await execute_plan(plan)
     normalized = normalize_results(results)
-    print("Normalized chunks:", len(normalized))
-
-    for evidence in normalized[:3]:
-        print("-" * 80)
-        print(evidence["url"])
-        print(evidence["content"][:900])
-        print("-" * 80)
     saved_evidence = save_evidence(task_db_ids, normalized)
-    result_count = ingest_reseach(saved_evidence)
-    print(f"chromdb_count = {result_count}")
+    ingest_reseach(saved_evidence)
     answer = synthesize_answer(query, normalized)
     save_answers(run_db_id, answer)
-    print(f"Time taken: {end - start}")
+    return answer
+
+
+@app.post("/research", response_model=ResearchResponse)
+async def research(request: ResearchRequest):
+    answer = await run_research(request.question)
+
+    return {
+        "question": request.question,
+        "answer": answer,
+    }
+
+
+def main():
+    query = input("Question: ")
+    answer = asyncio.run(run_research(query))
+    print(answer)
 
 
 if __name__ == "__main__":
